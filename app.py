@@ -114,19 +114,14 @@ col_home, col_away = st.columns(2)
 
 with col_home:
     st.markdown(f"#### 🏠 {home_team} — {home_formation}")
+    all_home_squad = get_squad(PLAYERS, home_team, SEASON)
+    if not all_home_squad:
+        st.warning(f"No players found for {home_team}")
     for i, slot in enumerate(home_slots):
-        group   = SLOT_TO_GROUP.get(slot, "MID")
-        options = get_players_by_group(PLAYERS, home_team, group, SEASON)
-        if not options:
-            options = get_squad(PLAYERS, home_team, SEASON)
-        if not options:
-            st.warning(f"No players found for {home_team}")
-            home_xi.append(None)
-            continue
-        # Avoid duplicate defaults
-        used = home_xi.copy()
+        options = all_home_squad if all_home_squad else ["No players"]
+        used    = home_xi.copy()
         available = [p for p in options if p not in used] or options
-        player = st.selectbox(
+        player  = st.selectbox(
             f"{slot} — Player {i+1}",
             options,
             index=options.index(available[0]) if available[0] in options else 0,
@@ -136,18 +131,14 @@ with col_home:
 
 with col_away:
     st.markdown(f"#### ✈️ {away_team} — {away_formation}")
+    all_away_squad = get_squad(PLAYERS, away_team, SEASON)
+    if not all_away_squad:
+        st.warning(f"No players found for {away_team}")
     for i, slot in enumerate(away_slots):
-        group   = SLOT_TO_GROUP.get(slot, "MID")
-        options = get_players_by_group(PLAYERS, away_team, group, SEASON)
-        if not options:
-            options = get_squad(PLAYERS, away_team, SEASON)
-        if not options:
-            st.warning(f"No players found for {away_team}")
-            away_xi.append(None)
-            continue
-        used = away_xi.copy()
+        options = all_away_squad if all_away_squad else ["No players"]
+        used    = away_xi.copy()
         available = [p for p in options if p not in used] or options
-        player = st.selectbox(
+        player  = st.selectbox(
             f"{slot} — Player {i+1}",
             options,
             index=options.index(available[0]) if available[0] in options else 0,
