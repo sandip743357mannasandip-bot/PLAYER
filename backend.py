@@ -1,7 +1,10 @@
 """
-backend.py — Fixed for:
-- Folder name: "PLAYER DATA" (space, uppercase)
-- Filenames: "Vinicius Junior - Sheet1.csv" format
+backend.py — Robust version:
+- Finds player_data folder regardless of name/case
+- Handles all filename formats (with/without - Sheet1)
+- Detects 2024-25 season by DATE RANGE (not Season string)
+  so all players are found regardless of how season is labeled
+- Falls back gracefully when position has no players
 """
 
 import os, math, glob, warnings
@@ -15,33 +18,34 @@ warnings.filterwarnings("ignore")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# ── Try multiple possible folder names ──
+# Season date range — any match between these dates = 2024-25
+SEASON_START = pd.Timestamp("2024-07-01")
+SEASON_END   = pd.Timestamp("2025-06-30")
+
+# ── Find player_data folder automatically ──
 def find_player_data_dir():
     candidates = [
-        os.path.join(BASE_DIR, "PLAYER DATA"),
-        os.path.join(BASE_DIR, "player_data"),
-        os.path.join(BASE_DIR, "Player Data"),
-        os.path.join(BASE_DIR, "PLAYER_DATA"),
+        "PLAYER DATA", "player_data", "Player Data",
+        "PLAYER_DATA", "PlayerData", "data", "DATA",
     ]
-    for path in candidates:
-        if os.path.isdir(path):
-            return path
-    # fallback: search for any folder containing CSVs
+    for c in candidates:
+        p = os.path.join(BASE_DIR, c)
+        if os.path.isdir(p) and glob.glob(os.path.join(p, "*.csv")):
+            return p
+    # fallback: any subfolder with CSVs
     for item in os.listdir(BASE_DIR):
         full = os.path.join(BASE_DIR, item)
-        if os.path.isdir(full):
-            csvs = glob.glob(os.path.join(full, "*.csv"))
-            if csvs:
-                return full
-    return BASE_DIR  # last resort
+        if os.path.isdir(full) and glob.glob(os.path.join(full, "*.csv")):
+            return full
+    return BASE_DIR
 
 PLAYER_DATA_DIR = find_player_data_dir()
 
 POSITION_MAP = {
     "GK": "GK",
-    "CB": "DEF", "LB": "DEF", "RB": "DEF", "WB": "DEF",
+    "CB": "DEF", "LB": "DEF", "RB": "DEF", "WB": "DEF", "SW": "DEF",
     "DM": "MID", "CM": "MID", "LM": "MID", "RM": "MID", "AM": "MID",
-    "LW": "FWD", "RW": "FWD", "FW": "FWD", "ST": "FWD",
+    "LW": "FWD", "RW": "FWD", "FW": "FWD", "ST": "FWD", "CF": "FWD",
     "-":  "MID",
 }
 
@@ -63,12 +67,11 @@ SLOT_TO_GROUP = {
 }
 
 # ─────────────────────────────────────────
-# Clean player name from filename
+# Clean filename → player name
 # "Vinicius Junior - Sheet1.csv" → "Vinicius Junior"
 # ─────────────────────────────────────────
-def clean_player_name(filename):
-    name = os.path.splitext(os.path.basename(filename))[0]
-    # Remove " - Sheet1" or " - Sheet2" etc
+def clean_player_name(filepath):
+    name = os.path.splitext(os.path.basename(filepath))[0]
     if " - " in name:
         name = name.split(" - ")[0]
     return name.strip()
@@ -78,40 +81,42 @@ def clean_player_name(filename):
 # ─────────────────────────────────────────
 def load_all_players():
     players = {}
-    csv_files = glob.glob(os.path.join(PLAYER_DATA_DIR, "*.csv"))
-    for path in csv_files:
+    for path in glob.glob(os.path.join(PLAYER_DATA_DIR, "*.csv")):
         name = clean_player_name(path)
         try:
             df = pd.read_csv(path)
             df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
             df = df.dropna(subset=["Date"])
+            # Add a clean season flag based on date range
+            df["is_2024_25"] = (df["Date"] >= SEASON_START) & (df["Date"] <= SEASON_END)
             stat_cols = ["Goals","Assists","Shots","SoT","Minutes",
-                         "TacklesWon","Interceptions","Crosses","Fouls"]
+                         "TacklesWon","Interceptions","Crosses","Fouls",
+                         "TeamGoals","OppGoals"]
             for col in stat_cols:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
             players[name] = df
-        except Exception:
+        except Exception as e:
+            print(f"Warning: could not load {path}: {e}")
             continue
     return players
 
 # ─────────────────────────────────────────
-# 2. GET ALL CLUBS
+# 2. GET ALL CLUBS — using date range
 # ─────────────────────────────────────────
 def get_all_clubs(players_dict, season="2024-25"):
     clubs = set()
     for df in players_dict.values():
-        clubs.update(df[df["Season"] == season]["Team"].dropna().unique())
+        clubs.update(df[df["is_2024_25"]]["Team"].dropna().unique())
     return sorted(clubs)
 
 # ─────────────────────────────────────────
-# 3. GET SQUAD WITH POSITIONS
+# 3. GET SQUAD WITH POSITIONS — using date range
 # ─────────────────────────────────────────
 def get_squad_with_positions(players_dict, club, season="2024-25"):
     squad = {}
     for name, df in players_dict.items():
-        mask = (df["Team"] == club) & (df["Season"] == season)
-        club_df = df[mask]
+        club_df = df[df["is_2024_25"] & (df["Team"] == club)]
         if len(club_df) > 0:
             pos = club_df["Position"].mode()
             squad[name] = pos[0] if len(pos) > 0 else "-"
@@ -122,12 +127,17 @@ def get_squad(players_dict, club, season="2024-25"):
 
 # ─────────────────────────────────────────
 # 4. GET PLAYERS BY POSITION GROUP
+# Falls back to full squad if no players found for group
 # ─────────────────────────────────────────
 def get_players_by_group(players_dict, club, group, season="2024-25"):
     squad = get_squad_with_positions(players_dict, club, season)
-    result = [n for n, pos in squad.items()
-              if POSITION_MAP.get(pos.upper(), "MID") == group]
-    return sorted(result) if result else sorted(squad.keys())
+    filtered = [n for n, pos in squad.items()
+                if POSITION_MAP.get(str(pos).upper(), "MID") == group]
+    if filtered:
+        return sorted(filtered)
+    # Fallback: if no players match the position, return all squad members
+    # so the slot is never empty
+    return sorted(squad.keys())
 
 # ─────────────────────────────────────────
 # 5. AGGREGATE XI FEATURES
@@ -159,24 +169,24 @@ def aggregate_xi_features(players_dict, xi_players, match_date):
     return pd.DataFrame(rows).mean()
 
 # ─────────────────────────────────────────
-# 6. BUILD TRAINING DATA
+# 6. BUILD TRAINING DATA — using date range
 # ─────────────────────────────────────────
 def build_training_data(players_dict, club, season="2024-25"):
     club_matches = []
     for name, df in players_dict.items():
-        mask = (df["Team"] == club) & (df["Season"] == season)
-        cdf  = df[mask][["Date","TeamGoals","OppGoals","Venue"]].drop_duplicates()
+        cdf = df[df["is_2024_25"] & (df["Team"] == club)]
+        cdf = cdf[["Date","TeamGoals","OppGoals","Venue"]].drop_duplicates()
         if len(cdf) > 0:
             club_matches.append(cdf)
     if not club_matches:
         return pd.DataFrame(), pd.Series(dtype=float)
 
-    matches = pd.concat(club_matches).drop_duplicates("Date").sort_values("Date")
+    matches  = pd.concat(club_matches).drop_duplicates("Date").sort_values("Date")
     features, targets = [], []
 
     for _, row in matches.iterrows():
         mdate    = row["Date"]
-        squad    = get_squad(players_dict, club, season)
+        squad    = get_squad(players_dict, club)
         xi_feats = aggregate_xi_features(players_dict, squad, mdate)
 
         team_past = []
@@ -218,10 +228,9 @@ def train_models(X, y):
     rf.fit(Xtr, ytr); lr.fit(Xtr, ytr)
     mae_rf = mean_absolute_error(yte, rf.predict(Xte)) if len(Xte) > 0 else 1.0
     mae_lr = mean_absolute_error(yte, lr.predict(Xte)) if len(Xte) > 0 else 1.0
-    w_rf = 1 / (mae_rf + 1e-5)
-    w_lr = 1 / (mae_lr + 1e-5)
-    total = w_rf + w_lr
-    return rf, lr, w_rf / total, w_lr / total
+    w_rf = 1/(mae_rf+1e-5); w_lr = 1/(mae_lr+1e-5)
+    t = w_rf + w_lr
+    return rf, lr, w_rf/t, w_lr/t
 
 # ─────────────────────────────────────────
 # 8. TRADITIONAL xG
@@ -235,7 +244,7 @@ def traditional_xg(xi_feats, avg_scored):
 # 9. POISSON
 # ─────────────────────────────────────────
 def poisson_prob(lam, k):
-    return math.exp(-lam) * (lam ** k) / math.factorial(k)
+    return math.exp(-lam) * (lam**k) / math.factorial(k)
 
 def scoreline_matrix(lam_h, lam_a, max_goals=6):
     m = np.zeros((max_goals+1, max_goals+1))
@@ -278,7 +287,7 @@ def predict_match(players_dict, home_team, away_team,
             "venue_home":         venue_val,
         }])
 
-        X, y = build_training_data(players_dict, team, season)
+        X, y = build_training_data(players_dict, team)
         if len(X) >= 5:
             rf, lr, w_rf, w_lr = train_models(X, y)
             xg_ml    = w_rf * max(rf.predict(feat_row)[0], 0) + \
