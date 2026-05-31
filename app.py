@@ -119,12 +119,10 @@ with col_home:
         st.warning(f"No players found for {home_team}")
     for i, slot in enumerate(home_slots):
         options = all_home_squad if all_home_squad else ["No players"]
-        used    = home_xi.copy()
-        available = [p for p in options if p not in used] or options
         player  = st.selectbox(
             f"{slot} — Player {i+1}",
             options,
-            index=options.index(available[0]) if available[0] in options else 0,
+            index=min(i, len(options)-1),
             key=f"home_slot_{i}"
         )
         home_xi.append(player)
@@ -136,12 +134,10 @@ with col_away:
         st.warning(f"No players found for {away_team}")
     for i, slot in enumerate(away_slots):
         options = all_away_squad if all_away_squad else ["No players"]
-        used    = away_xi.copy()
-        available = [p for p in options if p not in used] or options
         player  = st.selectbox(
             f"{slot} — Player {i+1}",
             options,
-            index=options.index(available[0]) if available[0] in options else 0,
+            index=min(i, len(options)-1),
             key=f"away_slot_{i}"
         )
         away_xi.append(player)
